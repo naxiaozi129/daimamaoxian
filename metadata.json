@@ -1,0 +1,5 @@
+{
+  "name": "代码探险 AI",
+  "description": "受 iCode 启发的逻辑解谜游戏，你需要通过编程控制机器人通过关卡，并有 AI 导师辅助调试代码。",
+  "requestFramePermissions": []
+}
