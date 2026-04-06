@@ -1,4 +1,28 @@
-import { Direction, LevelConfig, Position } from './types';
+import { CommandType, Direction, LevelConfig, Position } from './types';
+
+export const MAX_COMMANDS = 30;
+
+/** 单关指令上限（未配置则用全局 MAX_COMMANDS） */
+export function getLevelMaxCommands(level: LevelConfig): number {
+  return level.maxCommandsOverride ?? MAX_COMMANDS;
+}
+
+/** 运行前校验：指令数量与必带结构 */
+export function validateProgramForLevel(level: LevelConfig, cmds: CommandType[]): string | null {
+  const maxCmds = getLevelMaxCommands(level);
+  if (cmds.length > maxCmds) {
+    return `指令条数超限：本关最多 ${maxCmds} 条，当前 ${cmds.length} 条。`;
+  }
+  if (level.requireLoop) {
+    const ok = cmds.some((c) => c === CommandType.REPEAT_3 || c === CommandType.REPEAT_5);
+    if (!ok) return '本关约束：程序中必须包含至少一个 repeat(3) 或 repeat(5)。';
+  }
+  if (level.requireIf) {
+    const ok = cmds.some((c) => c === CommandType.IF_OBSTACLE);
+    if (!ok) return '本关约束：程序中必须包含至少一次 if(isPathBlocked())。';
+  }
+  return null;
+}
 
 export const LEVEL_CONFIGS: LevelConfig[] = [
   {
@@ -77,10 +101,110 @@ export const LEVEL_CONFIGS: LevelConfig[] = [
         { x: 3, y: 3 }
     ],
     optimalSteps: 8,
-  }
+  },
+  {
+    id: 7,
+    name: '循环条令',
+    description:
+      '笔直长廊：必须用 repeat 组织代码；「前进」累计次数不得超过上限（多走一格都会判负）。',
+    gridSize: 8,
+    startPos: { x: 0, y: 3 },
+    startDir: Direction.RIGHT,
+    goalPos: { x: 7, y: 3 },
+    obstacles: [],
+    optimalSteps: 7,
+    requireLoop: true,
+    maxForwardMoves: 9,
+    maxCommandsOverride: 28,
+  },
+  {
+    id: 8,
+    name: '之字形栈道',
+    description: '中路被堵死，只能绕行；仍要求使用循环，并限制总前进步数。',
+    gridSize: 7,
+    startPos: { x: 0, y: 3 },
+    startDir: Direction.RIGHT,
+    goalPos: { x: 6, y: 3 },
+    obstacles: [{ x: 2, y: 3 }, { x: 3, y: 3 }, { x: 4, y: 3 }],
+    optimalSteps: 8,
+    requireLoop: true,
+    maxForwardMoves: 11,
+    maxCommandsOverride: 30,
+  },
+  {
+    id: 9,
+    name: '门闩阵列',
+    description: '同一行上有多处障碍，适合用「如果前方受阻」做分支；本关强制要求写出 if。',
+    gridSize: 7,
+    startPos: { x: 0, y: 3 },
+    startDir: Direction.RIGHT,
+    goalPos: { x: 6, y: 3 },
+    obstacles: [{ x: 2, y: 3 }, { x: 4, y: 3 }],
+    optimalSteps: 9,
+    requireIf: true,
+    maxForwardMoves: 14,
+    maxCommandsOverride: 32,
+  },
+  {
+    id: 10,
+    name: '双因子验证',
+    description: '同时携带循环与条件两种结构；前进总数与指令条数均有硬性上限。',
+    gridSize: 8,
+    startPos: { x: 0, y: 4 },
+    startDir: Direction.RIGHT,
+    goalPos: { x: 7, y: 4 },
+    obstacles: [{ x: 2, y: 4 }, { x: 3, y: 4 }, { x: 4, y: 4 }, { x: 5, y: 4 }],
+    optimalSteps: 10,
+    requireLoop: true,
+    requireIf: true,
+    maxForwardMoves: 14,
+    maxCommandsOverride: 34,
+  },
+  {
+    id: 11,
+    name: '深隧回环',
+    description: '更长的断带障碍带，继续考验循环 + 条件配合与步数预算。',
+    gridSize: 8,
+    startPos: { x: 0, y: 3 },
+    startDir: Direction.RIGHT,
+    goalPos: { x: 7, y: 3 },
+    obstacles: [
+      { x: 2, y: 3 },
+      { x: 3, y: 3 },
+      { x: 4, y: 3 },
+      { x: 5, y: 3 },
+    ],
+    optimalSteps: 10,
+    requireLoop: true,
+    requireIf: true,
+    maxForwardMoves: 15,
+    maxCommandsOverride: 36,
+  },
+  {
+    id: 12,
+    name: '终焉网格',
+    description: '综合大关：大网格、墙垛与窄门并存；必须含 repeat 与 if，并遵守前进上限。',
+    gridSize: 9,
+    startPos: { x: 0, y: 4 },
+    startDir: Direction.RIGHT,
+    goalPos: { x: 8, y: 4 },
+    obstacles: [
+      { x: 2, y: 4 },
+      { x: 3, y: 4 },
+      { x: 4, y: 4 },
+      { x: 5, y: 4 },
+      { x: 6, y: 4 },
+      { x: 1, y: 2 },
+      { x: 3, y: 2 },
+      { x: 7, y: 5 },
+    ],
+    optimalSteps: 14,
+    requireLoop: true,
+    requireIf: true,
+    maxForwardMoves: 22,
+    maxCommandsOverride: 40,
+  },
 ];
-
-export const MAX_COMMANDS = 30;
 
 export const DIRECTION_ROTATION: Record<Direction, number> = {
   [Direction.UP]: 0,

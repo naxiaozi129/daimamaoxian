@@ -5,13 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>代码探险 AI - 逻辑挑战</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
     <script>
       tailwind.config = {
         theme: {
           extend: {
             fontFamily: {
               sans: ['Inter', 'sans-serif'],
+              display: ['Outfit', 'Inter', 'sans-serif'],
               mono: ['JetBrains Mono', 'monospace'],
             },
             colors: {
@@ -23,15 +24,32 @@
                 danger: '#ef4444',
                 grid: '#334155'
               }
-            }
+            },
+            boxShadow: {
+              'glow-sm': '0 0 20px -4px rgba(56, 189, 248, 0.45)',
+              'glow-md': '0 0 40px -8px rgba(56, 189, 248, 0.5)',
+              panel: '0 18px 50px -20px rgba(0, 0, 0, 0.65)',
+            },
+            animation: {
+              'fade-up': 'fadeUp 0.45s ease-out both',
+            },
+            keyframes: {
+              fadeUp: {
+                '0%': { opacity: '0', transform: 'translateY(8px)' },
+                '100%': { opacity: '1', transform: 'translateY(0)' },
+              },
+            },
           }
         }
       }
     </script>
     <style>
       body {
-        background-color: #0f172a;
+        margin: 0;
+        min-height: 100vh;
+        background-color: #070b14;
         color: #f8fafc;
+        -webkit-font-smoothing: antialiased;
       }
       /* Smooth movement animations */
       .robot-transition {

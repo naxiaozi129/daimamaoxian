@@ -1,27 +1,50 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Terminal, Cpu, ChevronRight, RefreshCw, Star, Info } from 'lucide-react';
-import { LEVEL_CONFIGS, DIRECTION_VECTORS } from './constants';
-import { CommandType, Direction, GameState, LevelConfig } from './types';
+import { Terminal, Cpu, ChevronRight, Star, Info, Repeat, GitBranch, Footprints, Hash, LogOut } from 'lucide-react';
+import { LEVEL_CONFIGS, DIRECTION_VECTORS, validateProgramForLevel, getLevelMaxCommands } from './constants';
+import { CommandType, Direction, GameState } from './types';
 import GameCanvas from './components/GameCanvas';
 import ControlPanel from './components/ControlPanel';
-import { getAiHint, getStoryBriefing } from './services/geminiService';
+import LoginScreen from './components/LoginScreen';
+import { getAiHint, getOptimalSolutionHint, getStoryBriefing } from './services/geminiService';
+import {
+  getInitialFromStorage,
+  loadProgress,
+  saveProgress,
+  setSavedUsername,
+  clearSavedUsername,
+} from './services/progressStorage';
 
 const App: React.FC = () => {
-  const [currentLevelIndex, setCurrentLevelIndex] = useState(0);
+  const [bootstrap] = useState(() => getInitialFromStorage());
+
+  const [appPhase, setAppPhase] = useState<'login' | 'game'>(() => (bootstrap.username ? 'game' : 'login'));
+  const [persistedUsername, setPersistedUsername] = useState<string | null>(() => bootstrap.username);
+  const [maxReachedLevelIndex, setMaxReachedLevelIndex] = useState(() =>
+    bootstrap.username ? bootstrap.maxReachedLevelIndex : 0
+  );
+  const [currentLevelIndex, setCurrentLevelIndex] = useState(() =>
+    bootstrap.username ? bootstrap.lastLevelIndex : 0
+  );
+
   const [commands, setCommands] = useState<CommandType[]>([]);
-  const [gameState, setGameState] = useState<GameState>({
-    currentLevelId: LEVEL_CONFIGS[0].id,
-    playerPos: { ...LEVEL_CONFIGS[0].startPos },
-    playerDir: LEVEL_CONFIGS[0].startDir,
-    path: [{ ...LEVEL_CONFIGS[0].startPos }],
-    isPlaying: false,
-    isWon: false,
-    isLost: false,
-    errorMsg: null,
-    commands: [],
+  const [gameState, setGameState] = useState<GameState>(() => {
+    const idx = bootstrap.username ? bootstrap.lastLevelIndex : 0;
+    const L = LEVEL_CONFIGS[idx];
+    return {
+      currentLevelId: L.id,
+      playerPos: { ...L.startPos },
+      playerDir: L.startDir,
+      path: [{ ...L.startPos }],
+      isPlaying: false,
+      isWon: false,
+      isLost: false,
+      errorMsg: null,
+      commands: [],
+    };
   });
   
   const [aiMessage, setAiMessage] = useState<string | null>(null);
+  const [aiPanelVariant, setAiPanelVariant] = useState<'mentor' | 'optimal'>('mentor');
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [storyText, setStoryText] = useState<string>("");
   
@@ -31,6 +54,39 @@ const App: React.FC = () => {
 
   const currentLevel = LEVEL_CONFIGS[currentLevelIndex];
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (!persistedUsername) return;
+    saveProgress(persistedUsername, {
+      maxReachedLevelIndex,
+      lastLevelIndex: currentLevelIndex,
+    });
+  }, [persistedUsername, maxReachedLevelIndex, currentLevelIndex]);
+
+  const enterGameAsUser = useCallback((username: string) => {
+    setSavedUsername(username);
+    const p = loadProgress(username);
+    setPersistedUsername(username);
+    setMaxReachedLevelIndex(p.maxReachedLevelIndex);
+    setCurrentLevelIndex(p.lastLevelIndex);
+    setAppPhase('game');
+  }, []);
+
+  const enterAsGuest = useCallback(() => {
+    clearSavedUsername();
+    setPersistedUsername(null);
+    setMaxReachedLevelIndex(0);
+    setCurrentLevelIndex(0);
+    setAppPhase('game');
+  }, []);
+
+  const backToLogin = useCallback(() => {
+    clearSavedUsername();
+    setPersistedUsername(null);
+    setMaxReachedLevelIndex(0);
+    setCurrentLevelIndex(0);
+    setAppPhase('login');
+  }, []);
 
   // Helper: Generate code from commands with indentation
   const generateCodeFromCommands = useCallback((cmds: CommandType[]): string => {
@@ -179,6 +235,9 @@ const App: React.FC = () => {
   }, [codeText, isCodeMode, parseCodeToCommands]);
 
   const handleAddCommand = useCallback((cmd: CommandType) => {
+    const cmdLimit = getLevelMaxCommands(currentLevel);
+    if (!isCodeMode && commands.length >= cmdLimit) return;
+
     if (isCodeMode) {
         let newText = "";
         switch (cmd) {
@@ -194,7 +253,7 @@ const App: React.FC = () => {
     } else {
         setCommands(prev => [...prev, cmd]);
     }
-  }, [isCodeMode]);
+  }, [isCodeMode, commands.length, currentLevel]);
 
   const handleRemoveCommand = (index: number) => {
     if (!isCodeMode) {
@@ -210,6 +269,21 @@ const App: React.FC = () => {
   // --- INTERPRETER LOGIC ---
   const executeCommands = useCallback(async () => {
     if (commands.length === 0) return;
+
+    const ruleError = validateProgramForLevel(currentLevel, commands);
+    if (ruleError) {
+      setGameState((prev) => ({
+        ...prev,
+        isPlaying: false,
+        isWon: false,
+        isLost: true,
+        errorMsg: ruleError,
+        playerPos: { ...currentLevel.startPos },
+        playerDir: currentLevel.startDir,
+        path: [{ ...currentLevel.startPos }],
+      }));
+      return;
+    }
 
     if (abortControllerRef.current) abortControllerRef.current.abort();
     const ac = new AbortController();
@@ -234,6 +308,7 @@ const App: React.FC = () => {
     const callStack: { returnAddr: number, count: number }[] = [];
     const MAX_STEPS = 1000; // Infinite loop protection
     let stepsExecuted = 0;
+    let forwardMoves = 0;
 
     try {
         while (pc < commands.length) {
@@ -272,6 +347,22 @@ const App: React.FC = () => {
                     }
                     currentPos = nextPos;
                     currentPath = [...currentPath, currentPos];
+                    forwardMoves++;
+                    if (
+                        currentLevel.maxForwardMoves != null &&
+                        forwardMoves > currentLevel.maxForwardMoves
+                    ) {
+                        setGameState((prev) => ({
+                            ...prev,
+                            isPlaying: false,
+                            isLost: true,
+                            errorMsg: `前进步数超限：本关最多 ${currentLevel.maxForwardMoves} 次前进，已超出。`,
+                            playerPos: currentPos,
+                            playerDir: currentDir,
+                            path: currentPath,
+                        }));
+                        return;
+                    }
                     pc++;
                     break;
                 }
@@ -412,151 +503,287 @@ const App: React.FC = () => {
 
   const handleNextLevel = () => {
     if (currentLevelIndex < LEVEL_CONFIGS.length - 1) {
-        setCurrentLevelIndex(prev => prev + 1);
+      const next = currentLevelIndex + 1;
+      setMaxReachedLevelIndex((m) => Math.max(m, next));
+      setCurrentLevelIndex(next);
     }
   };
 
   const handleAskAI = async () => {
     setIsAiLoading(true);
+    setAiPanelVariant('mentor');
     setAiMessage(null);
     const hint = await getAiHint(currentLevel, commands, gameState.errorMsg);
     setAiMessage(hint);
     setIsAiLoading(false);
   };
 
+  const handleOptimalHint = useCallback(async () => {
+    setIsAiLoading(true);
+    setAiPanelVariant('optimal');
+    setAiMessage(null);
+    try {
+      const hint = await getOptimalSolutionHint(currentLevel);
+      setAiMessage(hint);
+    } finally {
+      setIsAiLoading(false);
+    }
+  }, [currentLevel]);
+
+  if (appPhase === 'login') {
+    return <LoginScreen onLogin={enterGameAsUser} onGuest={enterAsGuest} />;
+  }
+
   return (
-    <div className="min-h-screen flex flex-col font-sans text-slate-100 selection:bg-sky-500/30">
-      {/* Navbar */}
-      <header className="h-16 border-b border-slate-700 bg-slate-900/80 backdrop-blur-md flex items-center justify-between px-6 sticky top-0 z-50">
-        <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-sky-900/20">
-                <Terminal className="text-white" size={24} />
-            </div>
-            <div>
-                <h1 className="font-bold text-xl tracking-tight">代码探险 <span className="text-sky-400">AI</span></h1>
-                <p className="text-[10px] text-slate-400 font-mono tracking-widest uppercase">逻辑协议已启动</p>
-            </div>
+    <div className="min-h-screen flex flex-col font-sans text-slate-100 selection:bg-sky-500/30 app-backdrop">
+      <header className="h-[4.25rem] shrink-0 border-b border-slate-700/80 bg-slate-950/55 backdrop-blur-xl flex items-center justify-between px-4 sm:px-8 sticky top-0 z-50 gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-sky-400 via-sky-500 to-indigo-600 flex items-center justify-center shadow-glow-sm ring-1 ring-white/10 shrink-0">
+            <Terminal className="text-white" size={24} strokeWidth={2} />
+          </div>
+          <div className="min-w-0">
+            <h1 className="font-display font-bold text-lg sm:text-xl tracking-tight text-white truncate">
+              代码探险 <span className="text-sky-400">AI</span>
+            </h1>
+            <p className="text-[10px] text-slate-500 font-mono tracking-[0.18em] uppercase truncate">
+              逻辑训练 · 可视化执行
+            </p>
+          </div>
         </div>
-        
-        <div className="flex items-center gap-4">
-            <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-slate-800 rounded-full border border-slate-700">
-                <Cpu size={14} className="text-sky-400" />
-                <span className="text-xs font-mono text-slate-300">系统：在线</span>
-            </div>
+
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          <div
+            className={`flex items-center min-w-0 max-w-[120px] sm:max-w-[200px] px-2.5 py-1 rounded-lg border text-[11px] font-mono truncate ${
+              persistedUsername
+                ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-200/90'
+                : 'bg-slate-800/80 border-slate-600 text-slate-400'
+            }`}
+            title={persistedUsername ? `已登录：${persistedUsername}` : '游客模式'}
+          >
+            {persistedUsername ? persistedUsername : '游客 · 不存档'}
+          </div>
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900/80 border border-slate-700/80">
+            <Cpu size={14} className="text-sky-400" />
+            <span className="text-xs font-mono text-slate-300">模拟器在线</span>
+          </div>
+          <button
+            type="button"
+            onClick={backToLogin}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-600 bg-slate-800/80 hover:bg-slate-800 text-slate-200 text-xs font-semibold transition-colors"
+            title={persistedUsername ? '退出登录并返回登录页' : '返回登录页'}
+          >
+            <LogOut size={16} />
+            <span className="hidden sm:inline">{persistedUsername ? '退出' : '登录页'}</span>
+          </button>
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="flex-1 container mx-auto p-4 md:p-6 lg:max-w-6xl">
-        
-        {/* Level Header */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
-            <div>
-                <div className="flex items-center gap-2 mb-1">
-                    <span className="px-2 py-0.5 rounded bg-sky-900/50 text-sky-300 text-xs font-bold border border-sky-800">第 {currentLevel.id} 关</span>
-                    <h2 className="text-2xl font-bold text-white">{currentLevel.name}</h2>
-                </div>
-                <p className="text-slate-400 text-sm max-w-xl">{currentLevel.description}</p>
-                <p className="text-xs text-indigo-400 mt-1 font-mono italic">"{storyText}"</p>
+      <main className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 md:py-8">
+        <section className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 mb-8 animate-fade-up">
+          <div className="space-y-3 max-w-2xl">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-sky-500/15 text-sky-300 text-xs font-bold border border-sky-500/25 font-mono">
+                LV.{currentLevel.id}
+              </span>
+              <h2 className="font-display text-2xl sm:text-3xl font-bold text-white tracking-tight">
+                {currentLevel.name}
+              </h2>
             </div>
+            <p className="text-slate-400 text-sm leading-relaxed">{currentLevel.description}</p>
+            {storyText && (
+              <blockquote className="relative pl-4 border-l-2 border-indigo-500/50 text-sm text-indigo-200/90 italic leading-relaxed">
+                {storyText}
+              </blockquote>
+            )}
+            {(currentLevel.requireLoop ||
+              currentLevel.requireIf ||
+              currentLevel.maxForwardMoves != null ||
+              currentLevel.maxCommandsOverride != null) && (
+              <div className="flex flex-wrap gap-2 mt-3">
+                {currentLevel.requireLoop && (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-200/95 text-xs font-medium">
+                    <Repeat size={13} className="shrink-0" />
+                    必须包含 repeat
+                  </span>
+                )}
+                {currentLevel.requireIf && (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-200/95 text-xs font-medium">
+                    <GitBranch size={13} className="shrink-0" />
+                    必须包含 if(障碍)
+                  </span>
+                )}
+                {currentLevel.maxForwardMoves != null && (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-500/15 border border-cyan-500/30 text-cyan-200/95 text-xs font-medium">
+                    <Footprints size={13} className="shrink-0" />
+                    前进 ≤ {currentLevel.maxForwardMoves} 次
+                  </span>
+                )}
+                {(currentLevel.maxCommandsOverride != null) && (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-500/15 border border-violet-500/30 text-violet-200/95 text-xs font-medium">
+                    <Hash size={13} className="shrink-0" />
+                    指令 ≤ {getLevelMaxCommands(currentLevel)} 条
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
 
-            <div className="flex items-center gap-2">
-                <div className="flex -space-x-1">
-                    {LEVEL_CONFIGS.map((l, idx) => (
-                        <div 
-                            key={l.id} 
-                            onClick={() => idx <= currentLevelIndex ? setCurrentLevelIndex(idx) : null}
-                            className={`
-                                w-8 h-2 rounded-full transition-colors cursor-pointer
-                                ${idx === currentLevelIndex ? 'bg-sky-500 z-10 scale-110' : idx < currentLevelIndex ? 'bg-emerald-500' : 'bg-slate-700'}
-                            `}
-                        />
-                    ))}
-                </div>
+          <div className="flex flex-col items-stretch sm:items-end gap-2">
+            <span className="text-[10px] font-mono text-slate-500 uppercase tracking-widest text-right">关卡进度</span>
+            <div className="flex flex-wrap gap-1.5 justify-end max-w-[min(100%,420px)]">
+              {LEVEL_CONFIGS.map((l, idx) => {
+                const unlocked = idx <= maxReachedLevelIndex;
+                const active = idx === currentLevelIndex;
+                return (
+                  <button
+                    key={l.id}
+                    type="button"
+                    disabled={!unlocked}
+                    onClick={() => unlocked && setCurrentLevelIndex(idx)}
+                    title={l.name}
+                    className={`
+                      min-w-[2.25rem] h-9 px-2 rounded-lg text-xs font-mono font-bold transition-all border
+                      ${active
+                        ? 'bg-sky-500 text-slate-950 border-sky-400 shadow-glow-sm scale-105 z-10'
+                        : unlocked
+                          ? 'bg-slate-800/90 text-slate-200 border-slate-600 hover:border-sky-500/50 hover:text-white'
+                          : 'bg-slate-900/50 text-slate-600 border-slate-800 cursor-not-allowed'}
+                    `}
+                  >
+                    {l.id}
+                  </button>
+                );
+              })}
             </div>
-        </div>
+          </div>
+        </section>
 
-        {/* Game Layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-[calc(100vh-220px)] min-h-[600px]">
-            
-            {/* Left Col: Visuals */}
-            <div className="lg:col-span-7 flex flex-col gap-4">
-                <div className="flex-1 bg-slate-800/50 rounded-2xl border border-slate-700 p-6 flex items-center justify-center relative">
-                    <GameCanvas 
-                        level={currentLevel}
-                        playerPos={gameState.playerPos}
-                        playerDir={gameState.playerDir}
-                        path={gameState.path}
-                        isWon={gameState.isWon}
-                        isLost={gameState.isLost}
-                    />
-                    
-                    {/* Floating Hint Overlay */}
-                    {aiMessage && (
-                        <div className="absolute top-4 left-4 right-4 bg-indigo-900/90 backdrop-blur-md border border-indigo-500 p-4 rounded-xl shadow-2xl z-30 animate-in fade-in slide-in-from-top-4">
-                            <div className="flex items-start gap-3">
-                                <div className="p-2 bg-indigo-500 rounded-lg shrink-0">
-                                    <Cpu size={20} className="text-white" />
-                                </div>
-                                <div className="flex-1">
-                                    <h4 className="font-bold text-indigo-200 text-sm mb-1">AI 导师提示</h4>
-                                    <p className="text-sm text-white leading-relaxed">{aiMessage}</p>
-                                </div>
-                                <button onClick={() => setAiMessage(null)} className="text-indigo-300 hover:text-white">
-                                    &times;
-                                </button>
-                            </div>
-                        </div>
-                    )}
-                </div>
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-stretch min-h-0">
+          <div className="lg:col-span-7 flex flex-col gap-5 min-h-[min(70vh,720px)]">
+            <div className="flex-1 flex items-center justify-center rounded-2xl border border-slate-700/60 bg-slate-900/35 backdrop-blur-sm p-5 sm:p-8 shadow-panel relative min-h-[420px]">
+              <GameCanvas
+                level={currentLevel}
+                playerPos={gameState.playerPos}
+                playerDir={gameState.playerDir}
+                path={gameState.path}
+                isWon={gameState.isWon}
+                isLost={gameState.isLost}
+                errorMsg={gameState.errorMsg}
+                isPlaying={gameState.isPlaying}
+              />
 
-                {/* Info Bar */}
-                <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-slate-800 rounded-xl p-4 border border-slate-700 flex items-center gap-3">
-                        <Info className="text-slate-400" />
-                        <div>
-                            <div className="text-xs text-slate-400 uppercase font-bold">最优步数</div>
-                            <div className="text-lg font-mono text-white">~{currentLevel.optimalSteps} 步</div>
-                        </div>
+              {aiMessage && (
+                <div
+                  className={`absolute top-4 left-4 right-4 z-30 rounded-xl backdrop-blur-md p-4 shadow-2xl animate-in fade-in slide-in-from-top-2 duration-200 ${
+                    aiPanelVariant === 'optimal'
+                      ? 'border border-sky-400/40 bg-slate-950/90'
+                      : 'border border-indigo-400/35 bg-slate-950/90'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div
+                      className={`p-2 rounded-lg shrink-0 ring-1 ring-white/10 ${
+                        aiPanelVariant === 'optimal'
+                          ? 'bg-gradient-to-br from-sky-500 to-cyan-600'
+                          : 'bg-gradient-to-br from-indigo-500 to-violet-600'
+                      }`}
+                    >
+                      {aiPanelVariant === 'optimal' ? (
+                        <Info size={18} className="text-white" />
+                      ) : (
+                        <Cpu size={18} className="text-white" />
+                      )}
                     </div>
-                     {gameState.isWon ? (
-                         <button 
-                            onClick={handleNextLevel}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl p-4 border border-emerald-500 flex items-center justify-center gap-2 font-bold shadow-lg shadow-emerald-900/20 transition-all hover:scale-[1.02]"
-                        >
-                            <span>下一关</span>
-                            <ChevronRight />
-                        </button>
-                     ) : (
-                        <div className="bg-slate-800 rounded-xl p-4 border border-slate-700 flex items-center gap-3 opacity-50">
-                            <Star className="text-slate-400" />
-                            <div>
-                                <div className="text-xs text-slate-400 uppercase font-bold">状态</div>
-                                <div className="text-lg font-mono text-white">进行中</div>
-                            </div>
-                        </div>
-                     )}
+                    <div className="flex-1 min-w-0">
+                      <h4
+                        className={`font-display font-semibold text-sm mb-1 ${
+                          aiPanelVariant === 'optimal' ? 'text-sky-200' : 'text-indigo-200'
+                        }`}
+                      >
+                        {aiPanelVariant === 'optimal' ? '最优解提示' : 'AI 导师'}
+                      </h4>
+                      <p className="text-sm text-slate-100 leading-relaxed whitespace-pre-wrap">{aiMessage}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setAiMessage(null)}
+                      className="shrink-0 w-8 h-8 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white text-lg leading-none"
+                      aria-label="关闭提示"
+                    >
+                      ×
+                    </button>
+                  </div>
                 </div>
+              )}
             </div>
 
-            {/* Right Col: Controls */}
-            <div className="lg:col-span-5 h-full">
-                <ControlPanel 
-                    commands={commands}
-                    onAddCommand={handleAddCommand}
-                    onRemoveCommand={handleRemoveCommand}
-                    onClear={handleClearCommands}
-                    onRun={executeCommands}
-                    onReset={resetLevel}
-                    onAskAI={handleAskAI}
-                    gameState={gameState}
-                    isAiLoading={isAiLoading}
-                    isCodeMode={isCodeMode}
-                    codeText={codeText}
-                    onCodeChange={setCodeText}
-                    onToggleMode={() => setIsCodeMode(!isCodeMode)}
-                />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="rounded-xl border border-slate-700/70 bg-slate-900/50 p-4 flex items-center gap-4">
+                <button
+                  type="button"
+                  onClick={handleOptimalHint}
+                  disabled={isAiLoading}
+                  title="获取最优解思路提示"
+                  aria-label="获取最优解思路提示"
+                  className="w-11 h-11 rounded-xl bg-slate-800 border border-slate-600 flex items-center justify-center shrink-0 text-sky-400 hover:bg-slate-700/90 hover:border-sky-500/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/60 disabled:opacity-50 disabled:pointer-events-none transition-colors"
+                >
+                  <Info size={22} aria-hidden />
+                </button>
+                <div>
+                  <div className="text-[10px] text-slate-500 uppercase font-mono tracking-wider">参考最优步数</div>
+                  <div className="text-xl font-mono font-bold text-white">≈ {currentLevel.optimalSteps}</div>
+                  {currentLevel.maxForwardMoves != null && (
+                    <div className="text-[10px] text-slate-500 mt-1 font-mono">
+                      前进上限 {currentLevel.maxForwardMoves}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {gameState.isWon ? (
+                <button
+                  type="button"
+                  onClick={handleNextLevel}
+                  disabled={currentLevelIndex >= LEVEL_CONFIGS.length - 1}
+                  className="rounded-xl border border-emerald-500/50 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-40 disabled:pointer-events-none p-4 flex items-center justify-center gap-2 font-display font-bold text-white shadow-[0_16px_40px_-18px_rgba(16,185,129,0.55)] transition-all hover:scale-[1.02] active:scale-[0.99]"
+                >
+                  <span>{currentLevelIndex >= LEVEL_CONFIGS.length - 1 ? '已全部通关' : '下一关'}</span>
+                  <ChevronRight size={22} />
+                </button>
+              ) : (
+                <div className="rounded-xl border border-slate-700/60 bg-slate-900/35 p-4 flex items-center gap-4 opacity-90">
+                  <div className="w-11 h-11 rounded-xl bg-slate-800/80 border border-slate-700 flex items-center justify-center">
+                    <Star className="text-amber-400/90" size={22} />
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-slate-500 uppercase font-mono tracking-wider">任务状态</div>
+                    <div className="text-xl font-mono font-semibold text-slate-200">
+                      {gameState.isPlaying ? '执行中…' : gameState.isLost ? '需调整方案' : '待运行'}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
+          </div>
+
+          <div className="lg:col-span-5 lg:min-h-[min(70vh,720px)]">
+            <ControlPanel
+              commands={commands}
+              onAddCommand={handleAddCommand}
+              onRemoveCommand={handleRemoveCommand}
+              onClear={handleClearCommands}
+              onRun={executeCommands}
+              onReset={resetLevel}
+              onAskAI={handleAskAI}
+              gameState={gameState}
+              isAiLoading={isAiLoading}
+              isCodeMode={isCodeMode}
+              codeText={codeText}
+              onCodeChange={setCodeText}
+              onToggleMode={() => setIsCodeMode(!isCodeMode)}
+              maxCommands={getLevelMaxCommands(currentLevel)}
+            />
+          </div>
         </div>
       </main>
     </div>

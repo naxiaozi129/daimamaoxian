@@ -1,0 +1,106 @@
+/* 全局补充样式（Tailwind CDN 未覆盖的细节） */
+:root {
+  --ui-bg-deep: #070b14;
+  --ui-panel: rgba(15, 23, 42, 0.72);
+  --ui-border: rgba(56, 189, 248, 0.18);
+  --ui-glow: rgba(56, 189, 248, 0.35);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+::selection {
+  background: rgba(56, 189, 248, 0.28);
+  color: #f8fafc;
+}
+
+/* 页面背景：深色网格 + 柔光 */
+.app-backdrop {
+  background-color: var(--ui-bg-deep);
+  background-image:
+    radial-gradient(ellipse 120% 80% at 50% -20%, rgba(56, 189, 248, 0.16), transparent 55%),
+    radial-gradient(ellipse 90% 60% at 100% 50%, rgba(99, 102, 241, 0.12), transparent 50%),
+    radial-gradient(ellipse 70% 50% at 0% 80%, rgba(16, 185, 129, 0.08), transparent 45%),
+    linear-gradient(rgba(148, 163, 184, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.06) 1px, transparent 1px);
+  background-size: auto, auto, auto, 48px 48px, 48px 48px;
+  background-position: center, center, center, center, center;
+}
+
+/* 画布外框 HUD 角标 */
+.hud-frame {
+  box-shadow:
+    inset 0 0 0 1px rgba(148, 163, 184, 0.12),
+    0 0 0 1px rgba(15, 23, 42, 0.8),
+    0 24px 48px -12px rgba(0, 0, 0, 0.55);
+}
+
+.hud-corner::before,
+.hud-corner::after {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-color: rgba(56, 189, 248, 0.55);
+  pointer-events: none;
+}
+
+.hud-corner.tl::before {
+  top: 0;
+  left: 0;
+  border-top: 2px solid;
+  border-left: 2px solid;
+  border-radius: 4px 0 0 0;
+}
+.hud-corner.tr::after {
+  top: 0;
+  right: 0;
+  border-top: 2px solid;
+  border-right: 2px solid;
+  border-radius: 0 4px 0 0;
+}
+.hud-corner.bl::before {
+  bottom: 0;
+  left: 0;
+  border-bottom: 2px solid;
+  border-left: 2px solid;
+  border-radius: 0 0 0 4px;
+}
+.hud-corner.br::after {
+  bottom: 0;
+  right: 0;
+  border-bottom: 2px solid;
+  border-right: 2px solid;
+  border-radius: 0 0 4px 0;
+}
+
+/* 自定义滚动条（WebKit） */
+.overflow-y-auto::-webkit-scrollbar,
+textarea::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.overflow-y-auto::-webkit-scrollbar-thumb,
+textarea::-webkit-scrollbar-thumb {
+  background: rgba(71, 85, 105, 0.85);
+  border-radius: 999px;
+}
+.overflow-y-auto::-webkit-scrollbar-track,
+textarea::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.5);
+}
+
+@keyframes ui-shimmer {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+.btn-shimmer {
+  background-size: 200% 100%;
+  animation: ui-shimmer 3s ease infinite;
+}

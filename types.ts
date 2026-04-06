@@ -31,6 +31,14 @@ export interface LevelConfig {
   goalPos: Position;
   obstacles: Position[];
   optimalSteps: number;
+  /** 运行中累计「前进」次数上限（仅统计成功的 move）；不设置则不限制 */
+  maxForwardMoves?: number;
+  /** 程序里必须出现 repeat(3) 或 repeat(5) */
+  requireLoop?: boolean;
+  /** 程序里必须出现 if(isPathBlocked()) */
+  requireIf?: boolean;
+  /** 本关指令条数上限，默认使用全局 MAX_COMMANDS */
+  maxCommandsOverride?: number;
 }
 
 export interface GameState {
